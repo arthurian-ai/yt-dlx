@@ -1,128 +1,225 @@
-# YT DLX - YouTube Video Downloader
+# YT DLX
 
-A modern, sleek YouTube video downloader built with Next.js 16, Tailwind CSS, and shadcn/ui. Powered by yt-dlp for reliable video extraction.
+A polished local-first YouTube downloader UI built with Next.js, Tailwind, and yt-dlp.
 
-![YT DLX Screenshot](https://via.placeholder.com/800x400?text=YT+DLX+Downloader)
+YT DLX gives you a cleaner browser workflow around `yt-dlp`: paste a YouTube URL, inspect a curated set of practical download formats, and trigger a direct streamed download from the server.
 
-## Features
+## What this project does
 
-- 🎥 Download YouTube videos in multiple quality formats
-- 🖼️ Video preview with thumbnail, title, and duration
-- 🎨 Modern dark UI inspired by YouTube
-- ⚡ Fast and efficient streaming downloads
-- 📱 Responsive design for mobile and desktop
+- Accepts `youtube.com` and `youtu.be` links
+- Uses `yt-dlp` on the server to inspect available formats
+- Shows a cleaner shortlist of useful progressive formats plus audio-only options
+- Streams downloads directly instead of buffering the full file in memory first
+- Provides a modern dark UI with clearer error, empty, and loading states
 
-## Tech Stack
+## Stack
 
-- **Framework:** Next.js 16 (App Router)
-- **UI:** Tailwind CSS v4 + shadcn/ui
-- **Icons:** Lucide React
-- **Backend:** Next.js API Routes
-- **Download Engine:** yt-dlp
+- **Next.js 16** App Router
+- **React 19**
+- **Tailwind CSS v4**
+- **shadcn/ui / Base UI primitives**
+- **yt-dlp** for actual extraction and download handling
 
-## Getting Started
+## Architecture
 
-### Prerequisites
+### Frontend
+The main UI lives in:
 
-- Node.js 18+
-- yt-dlp (automatically downloaded on first run)
+- `src/components/VideoDownloader.tsx`
 
-### Installation
+It handles:
+- URL input and paste UX
+- requesting video metadata from the backend
+- rendering curated format choices
+- triggering downloads
 
+### Backend
+API routes:
+
+- `POST /api/info` → validate URL, probe metadata, return shaped formats
+- `GET /api/download` → validate request and stream download output
+
+Shared server helper:
+
+- `src/lib/yt-dlp.ts`
+
+That helper is responsible for:
+- locating the `yt-dlp` binary
+- probing metadata
+- spawning download streams
+- sanitizing filenames
+- shaping raw format data into something the UI can present cleanly
+
+## How yt-dlp is resolved
+
+YT DLX looks for `yt-dlp` in this order:
+
+1. `YT_DLP_BIN` environment variable
+2. `./bin/yt-dlp` inside this repo
+3. `yt-dlp` available on your system `PATH`
+
+If none of those exist, the app returns a clear setup error.
+
+## Prerequisites
+
+- **Node.js 20+** recommended
+- **npm**
+- **yt-dlp** installed locally
+
+## Installing yt-dlp
+
+### Option A: install on PATH (recommended)
+
+#### Linux / macOS
 ```bash
-# Clone the repository
-git clone https://github.com/arthurian-ai/yt-dlx.git
-cd yt-dlx
+python3 -m pip install -U yt-dlp
+```
 
-# Install dependencies
+Or download the standalone binary:
+```bash
+sudo curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o /usr/local/bin/yt-dlp
+sudo chmod a+rx /usr/local/bin/yt-dlp
+```
+
+#### Verify
+```bash
+yt-dlp --version
+```
+
+### Option B: keep a repo-local binary
+
+Create a local bin directory and drop the binary there:
+```bash
+mkdir -p bin
+curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o bin/yt-dlp
+chmod +x bin/yt-dlp
+```
+
+### Option C: use an explicit environment variable
+
+If your binary lives somewhere custom:
+```bash
+export YT_DLP_BIN=/absolute/path/to/yt-dlp
+```
+
+## Local development
+
+### 1) Install dependencies
+```bash
 npm install
+```
 
-# Run the development server
+### 2) Make sure yt-dlp is available
+Either:
+```bash
+yt-dlp --version
+```
+
+Or:
+```bash
+export YT_DLP_BIN=/absolute/path/to/yt-dlp
+```
+
+### 3) Start the dev server
+```bash
 npm run dev
 ```
 
-### Build for Production
+Then open:
+```bash
+http://localhost:3000
+```
+
+## Production-ish local run
+
+Build and run:
 
 ```bash
+npm run lint
 npm run build
 npm start
 ```
 
-Open [http://localhost:3000](http://localhost:3000) to use the app.
+## Exact commands Curtis can run
 
-## Deployment
-
-### Vercel (Recommended)
+If `yt-dlp` is already installed globally:
 
 ```bash
-npm i -g vercel
-vercel
+cd /home/curtis/.openclaw/workspace-lancelot/projects/yt-downloader
+npm install
+npm run dev
 ```
 
-### Docker
-
-```dockerfile
-FROM node:18-alpine
-WORKDIR /app
-COPY package*.json ./
-RUN npm ci
-COPY . .
-RUN npm run build
-EXPOSE 3000
-CMD ["npm", "start"]
-```
-
-## API Endpoints
-
-### Get Video Info
+If `yt-dlp` is not on PATH but you have a local binary:
 
 ```bash
-POST /api/info
-Content-Type: application/json
-
-{
-  "url": "https://www.youtube.com/watch?v=..."
-}
+cd /home/curtis/.openclaw/workspace-lancelot/projects/yt-downloader
+export YT_DLP_BIN=/absolute/path/to/yt-dlp
+npm install
+npm run dev
 ```
 
-Response:
-```json
-{
-  "id": "dQw4w9WgXcQ",
-  "title": "Video Title",
-  "thumbnail": "https://...",
-  "duration": 213,
-  "channel": "Channel Name",
-  "formats": [...]
-}
+To verify the production build:
+
+```bash
+cd /home/curtis/.openclaw/workspace-lancelot/projects/yt-downloader
+npm run lint
+npm run build
+npm start
 ```
 
-### Download Video
+## Design choices
 
+### Why a shared yt-dlp helper?
+The earlier version hardcoded `/tmp/yt-dlp`, which is brittle and annoying to run locally. The helper centralizes binary resolution and makes setup much more realistic.
+
+### Why stream downloads?
+The previous download route buffered the entire file into memory before returning it. That works poorly for larger downloads. Streaming is simpler, safer, and more practical.
+
+### Why only show curated formats?
+Raw `yt-dlp` format lists are noisy. For a lightweight UI, progressive formats with both video and audio are usually the most useful. This version favors those first, then adds a strong audio-only option.
+
+## Limitations
+
+- This app currently prefers **progressive** formats for simplicity. It does not yet merge separate video/audio tracks on the server.
+- Some videos may fail because of region locks, age restrictions, login requirements, or upstream YouTube changes.
+- `yt-dlp` behavior can change as YouTube changes.
+- This is intended as a local/self-hosted utility, not a public multi-user download service.
+
+## Troubleshooting
+
+### “yt-dlp not found”
+Install `yt-dlp`, put it on PATH, or set:
+```bash
+export YT_DLP_BIN=/absolute/path/to/yt-dlp
 ```
-GET /api/download?url=...&format_id=best
+
+### “Invalid YouTube URL”
+Use a full `youtube.com/watch?...` or `youtu.be/...` link.
+
+### Video info loads but some formats fail
+That usually means YouTube changed the available formats or the selected format expired. Reload the video info and try again.
+
+### Build works but downloads fail at runtime
+Check whether the server process can execute `yt-dlp`:
+```bash
+yt-dlp --version
 ```
 
-## Design Decisions
+Or if using a custom binary:
+```bash
+$YT_DLP_BIN --version
+```
 
-### Why These Technologies?
+## Validation
 
-- **Next.js 16:** Latest version with App Router provides excellent developer experience and performance
-- **Tailwind CSS v4:** Utility-first CSS with excellent dark mode support
-- **shadcn/ui:** Accessible, customizable components built on Radix UI
-- **yt-dlp:** The most reliable YouTube downloader, actively maintained
+This project should be validated with:
 
-### UI/UX Choices
+```bash
+npm run lint
+npm run build
+```
 
-- **Dark theme:** Matches YouTube's aesthetic, easier on the eyes
-- **YouTube Red (#ff0000):** Brand recognition
-- **Accent Blue (#3ea6ff):** For interactive elements
-- **Card-based layout:** Clear visual hierarchy
+## Legal / usage note
 
-## License
-
-MIT
-
-## Disclaimer
-
-This tool is for personal use only. Downloading videos may violate YouTube's Terms of Service. Use responsibly and respect copyright laws.
+Use this only for content you are allowed to download. Respect platform rules, copyright, and creator rights.
