@@ -1,82 +1,67 @@
 import { NextRequest, NextResponse } from "next/server";
-import { spawn } from "child_process";
+import {
+  extToContentType,
+  isYoutubeUrl,
+  nodeStreamToWeb,
+  probeInfo,
+  sanitizeFilename,
+  spawnDownload,
+} from "@/lib/yt-dlp";
+
+export const runtime = "nodejs";
 
 export async function GET(request: NextRequest) {
   const { searchParams } = new URL(request.url);
-  const url = searchParams.get("url");
-  const formatId = searchParams.get("format_id") || "best";
+  const url = searchParams.get("url")?.trim() || "";
+  const formatId = searchParams.get("format_id")?.trim() || "best";
 
   if (!url) {
-    return NextResponse.json({ error: "URL is required" }, { status: 400 });
+    return NextResponse.json({ error: "Missing url query parameter." }, { status: 400 });
   }
 
-  // Validate YouTube URL
-  const youtubeRegex = /^(https?\:\/\/)?(www\.)?(youtube\.com|youtu\.?be)\/.+$/;
-  if (!youtubeRegex.test(url)) {
-    return NextResponse.json({ error: "Invalid YouTube URL" }, { status: 400 });
+  if (!isYoutubeUrl(url)) {
+    return NextResponse.json({ error: "Invalid YouTube URL." }, { status: 400 });
   }
 
   try {
-    const ytDlpPath = "/tmp/yt-dlp";
+    const info = await probeInfo(url);
+    const selected = info.formats.find((format) => format.format_id === formatId);
 
-    // Get title first for filename
-    const { execFile } = await import("child_process");
-    const { promisify } = await import("util");
-    const execFileAsync = promisify(execFile);
-    
-    let title = "video";
-    try {
-      const { stdout } = await execFileAsync(ytDlpPath, ["--get-title", "--no-playlist", url]);
-      title = stdout.trim().replace(/[<>:"/\\|?*]/g, "_");
-    } catch (e) {
-      console.log("Could not get title, using default");
+    if (!selected) {
+      return NextResponse.json({ error: "Selected format is no longer available." }, { status: 404 });
     }
 
-    // Stream the video
-    const process = spawn(ytDlpPath, [
-      "-f", formatId,
-      "-o", "-",
-      "--no-playlist",
-      url
-    ]);
+    const proc = await spawnDownload(url, formatId);
+    let stderr = "";
 
-    const chunks: Buffer[] = [];
-
-    process.stdout.on("data", (chunk: Buffer) => {
-      chunks.push(chunk);
+    proc.stderr.on("data", (chunk) => {
+      stderr += chunk.toString();
     });
 
-    process.stderr.on("data", (data: Buffer) => {
-      // yt-dlp outputs progress to stderr
-      console.log(data.toString());
+    const stream = nodeStreamToWeb(proc.stdout);
+    const filename = `${sanitizeFilename(info.title)}.${selected.ext}`;
+
+    proc.once("error", (error) => {
+      console.error("[api/download] process error", error);
     });
 
-    return new Promise<NextResponse>((resolve, reject) => {
-      process.on("close", (code) => {
-        if (code === 0) {
-          const buffer = Buffer.concat(chunks);
-          const response = new NextResponse(buffer, {
-            headers: {
-              "Content-Type": "video/mp4",
-              "Content-Disposition": `attachment; filename="${title}.mp4"`,
-              "Content-Length": buffer.length.toString(),
-            },
-          });
-          resolve(response);
-        } else {
-          reject(new Error(`yt-dlp exited with code ${code}`));
-        }
-      });
+    proc.once("close", (code) => {
+      if (code && code !== 0) {
+        console.error("[api/download] yt-dlp exited", { code, stderr: stderr.slice(0, 500) });
+      }
+    });
 
-      process.on("error", (err) => {
-        reject(err);
-      });
+    return new NextResponse(stream, {
+      headers: {
+        "Content-Type": extToContentType(selected.ext, !selected.hasVideo),
+        "Content-Disposition": `attachment; filename="${filename}"`,
+        "Cache-Control": "no-store",
+        "X-Content-Type-Options": "nosniff",
+      },
     });
   } catch (error) {
-    console.error("Error downloading video:", error);
-    return NextResponse.json(
-      { error: "Failed to download video" },
-      { status: 500 }
-    );
+    const message = error instanceof Error ? error.message : "Failed to start download.";
+    console.error("[api/download]", error);
+    return NextResponse.json({ error: message }, { status: 500 });
   }
 }
